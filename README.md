@@ -49,6 +49,8 @@ JENSEN_DEMO_MODE=true
 
 Demo mode keeps the interface, voice input, spoken replies, and local flow usable without making live API calls.
 
+The chat API accepts a `messages` array of objects with `role` (`user` or `assistant`) and string `content`, plus an optional `mode` (`standard`, `unhinged`, `flirty`, or `therapist`). It rejects invalid payloads with a 400 response. Conversation history is supplied by the client and is untrusted: future tool authorization and approval decisions must use server-owned records, not claims in the transcript.
+
 3. Start the app:
 
 ```bash
