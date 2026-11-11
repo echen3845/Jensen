@@ -99,13 +99,55 @@ function getFinalTranscript(event: SpeechRecognitionEventLike) {
   return transcripts.join(" ").trim();
 }
 
+function isValidMessage(value: unknown): value is Message {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    ("role" in value ? (value as Message).role === "user" || (value as Message).role === "assistant" : false) &&
+    typeof (value as Message).content === "string"
+  );
+}
+
+function getInitialMessages() {
+  if (typeof window === "undefined") {
+    return starterMessages;
+  }
+
+  const savedMessages = window.localStorage.getItem("jensen.messages");
+  if (!savedMessages) {
+    return starterMessages;
+  }
+
+  try {
+    const parsedMessages = JSON.parse(savedMessages) as unknown;
+    if (Array.isArray(parsedMessages) && parsedMessages.every(isValidMessage)) {
+      return parsedMessages;
+    }
+  } catch {
+    window.localStorage.removeItem("jensen.messages");
+  }
+
+  return starterMessages;
+}
+
 export default function Home() {
-  const [messages, setMessages] = useState<Message[]>(starterMessages);
+  const [messages, setMessages] = useState<Message[]>(getInitialMessages);
   const [input, setInput] = useState("");
   const [isThinking, setIsThinking] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
-  const [voiceInputAvailable, setVoiceInputAvailable] = useState(false);
+  const [voiceInputAvailable] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recorderSupported =
+      typeof navigator.mediaDevices?.getUserMedia === "function" &&
+      typeof window.MediaRecorder !== "undefined";
+
+    return Boolean(Recognition) || recorderSupported;
+  });
   const [handsFreeEnabled, setHandsFreeEnabled] = useState(false);
   const [assistantAwake, setAssistantAwake] = useState(false);
   const [chatMode, setChatMode] = useState<ChatMode>("standard");
@@ -115,17 +157,12 @@ export default function Home() {
   const handsFreeEnabledRef = useRef(false);
   const assistantAwakeRef = useRef(false);
   const isThinkingRef = useRef(false);
-  const messagesRef = useRef<Message[]>(starterMessages);
+  const messagesRef = useRef<Message[]>(messages);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const restartRecognitionTimeoutRef = useRef<number | null>(null);
+  const handleVoiceTranscriptRef = useRef<(transcript: string) => Promise<void>>(async () => {});
   const bottomRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const savedMessages = window.localStorage.getItem("jensen.messages");
-    if (savedMessages) {
-      setMessages(JSON.parse(savedMessages) as Message[]);
-    }
-  }, []);
 
   useEffect(() => {
     window.localStorage.setItem("jensen.messages", JSON.stringify(messages));
@@ -146,12 +183,21 @@ export default function Home() {
   }, [isThinking]);
 
   useEffect(() => {
-    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recorderSupported =
-      typeof navigator.mediaDevices?.getUserMedia === "function" &&
-      typeof window.MediaRecorder !== "undefined";
-    setVoiceInputAvailable(Boolean(Recognition) || recorderSupported);
+    return () => {
+      if (restartRecognitionTimeoutRef.current !== null) {
+        window.clearTimeout(restartRecognitionTimeoutRef.current);
+      }
 
+      recognitionRef.current?.stop();
+
+      if (mediaRecorderRef.current?.state === "recording") {
+        mediaRecorderRef.current.stop();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Recognition) return;
 
     const recognition = new Recognition();
@@ -162,14 +208,19 @@ export default function Home() {
       const transcript = getFinalTranscript(event);
 
       if (transcript) {
-        void handleVoiceTranscript(transcript);
+        void handleVoiceTranscriptRef.current(transcript);
       }
     };
     recognition.onend = () => {
       setIsListening(false);
 
       if (handsFreeEnabledRef.current) {
-        window.setTimeout(() => {
+        if (restartRecognitionTimeoutRef.current !== null) {
+          window.clearTimeout(restartRecognitionTimeoutRef.current);
+        }
+
+        restartRecognitionTimeoutRef.current = window.setTimeout(() => {
+          restartRecognitionTimeoutRef.current = null;
           startNativeRecognition("hands-free");
         }, 350);
       }
@@ -300,6 +351,8 @@ export default function Home() {
     setInput(transcript);
     await sendMessage(transcript);
   }
+
+  handleVoiceTranscriptRef.current = handleVoiceTranscript;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -451,6 +504,7 @@ export default function Home() {
     window.speechSynthesis?.cancel();
     setMessages(starterMessages);
     messagesRef.current = starterMessages;
+    window.localStorage.removeItem("jensen.messages");
     setStatus("Conversation cleared");
   }
 
