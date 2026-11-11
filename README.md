@@ -67,6 +67,37 @@ npm run dev -- --hostname 0.0.0.0
 
 Then open `http://YOUR_COMPUTER_IP:3000` on the iPhone.
 
+## Development checks
+
+Use Node.js 22.22.2 (see `.nvmrc`) and npm. Install the exact dependency tree from a clean checkout with:
+
+```bash
+npm ci
+```
+
+Run all local quality checks before submitting a change:
+
+```bash
+npm run check
+```
+
+This runs ESLint with zero warnings allowed, generates Next.js route types and checks TypeScript, runs the unit tests once, and builds the production application. Each step is also available separately:
+
+| Command | Purpose |
+| --- | --- |
+| `npm run lint` | Check React, Next.js, and TypeScript lint rules |
+| `npm run typecheck` | Generate route types and check types without emitting JavaScript |
+| `npm test` | Run the unit suite once; fail when no tests are found |
+| `npm run test:watch` | Rerun tests while editing |
+| `npm run build` | Verify the production build |
+| `npm run audit:prod` | Fail on known high or critical production dependency advisories |
+
+Checks and builds require no API credentials. Tests replace the provider SDK, clear provider environment settings, and block global `fetch` so they do not spend API credits. Current coverage exercises chat provider selection, bounded model context, demo/missing-key paths, audio handoff, provider failure redaction, and runtime chat request validation. Invalid envelopes, content types, modes, and privileged roles are rejected before provider construction, including invalid messages outside the retained history window. Browser voice lifecycle regression coverage remains separate work; these tests do not establish that other pending security issues are fixed.
+
+GitHub Actions runs on pushes and pull requests, installs with `npm ci`, runs `npm run check`, and applies the production audit gate. It has read-only repository permissions and receives no application secrets. To enforce these checks before merging, configure branch protection to require the **Lint, types, tests, and build** check.
+
+The audit gate is separate from local `check` because it needs registry access. Investigate high/critical production advisories and update compatible versions before merging; do not use `npm audit fix --force` without reviewing breaking changes. Run `npm audit` to inspect development dependencies as well. A clean audit only reports known package advisories and does not replace application security review.
+
 ## Next milestones
 
 - Wake-word mode uses the browser's native speech recognition API. Browsers that do not expose that API can still use the mic button recording fallback, but they cannot do local wake-word detection yet.
