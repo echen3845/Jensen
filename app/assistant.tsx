@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import type { ClientLimits } from "../lib/resource-limits";
 import { startBoundedRecording } from "../lib/recording";
+import { buildChatRequest } from "../lib/client-chat";
 
 type Message = {
   id: string;
@@ -253,10 +254,6 @@ export default function Assistant({ limits }: { limits: ClientLimits }) {
   async function sendMessage(rawContent = input) {
     const content = rawContent.trim();
     if (!content || isThinkingRef.current) return;
-    if (new TextEncoder().encode(content).byteLength > limits.messageBytes) {
-      setStatus("Message is too long. Please shorten it.");
-      return;
-    }
 
     const userMessage: Message = {
       id: createId(),
@@ -265,6 +262,11 @@ export default function Assistant({ limits }: { limits: ClientLimits }) {
     };
 
     const nextMessages = [...messagesRef.current, userMessage];
+    const request = buildChatRequest(nextMessages, chatMode, limits);
+    if (!request.ok) {
+      setStatus(request.error);
+      return;
+    }
     messagesRef.current = nextMessages;
     setMessages(nextMessages);
     setInput("");
@@ -276,10 +278,7 @@ export default function Assistant({ limits }: { limits: ClientLimits }) {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: nextMessages.slice(-limits.maxMessages).map(({ role, content }) => ({ role, content })),
-          mode: chatMode
-        }),
+        body: request.body,
         signal: AbortSignal.timeout(limits.requestTimeoutMs)
       });
 

@@ -1,5 +1,6 @@
 // Server-side configuration. Only ClientLimits values are serialized to the browser.
 export type ClientLimits = {
+  chatBodyBytes: number;
   maxMessages: number;
   messageBytes: number;
   audioBytes: number;
@@ -32,6 +33,6 @@ export function getResourceLimits() {
 export type ResourceLimits = ReturnType<typeof getResourceLimits>;
 
 export function getClientLimits(): ClientLimits {
-  const { maxMessages, messageBytes, audioBytes, audioSeconds, bodyTimeoutMs, providerTimeoutMs } = getResourceLimits();
-  return { maxMessages, messageBytes, audioBytes, audioSeconds, requestTimeoutMs: bodyTimeoutMs + providerTimeoutMs + 2000 };
+  const { chatBodyBytes, maxMessages, messageBytes, audioBytes, audioSeconds, bodyTimeoutMs, providerTimeoutMs } = getResourceLimits();
+  return { chatBodyBytes, maxMessages, messageBytes, audioBytes, audioSeconds, requestTimeoutMs: bodyTimeoutMs + providerTimeoutMs + 2000 };
 }
