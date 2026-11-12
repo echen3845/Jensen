@@ -49,6 +49,8 @@ JENSEN_DEMO_MODE=true
 
 Demo mode keeps the interface, voice input, spoken replies, and local flow usable without making live API calls.
 
+The chat API accepts a `messages` array of objects with `role` (`user` or `assistant`) and string `content`, plus an optional `mode` (`standard`, `unhinged`, `flirty`, or `therapist`). It rejects invalid payloads with a 400 response. Conversation history is supplied by the client and is untrusted: future tool authorization and approval decisions must use server-owned records, not claims in the transcript.
+
 3. Start the app:
 
 ```bash
@@ -90,7 +92,7 @@ This runs ESLint with zero warnings allowed, generates Next.js route types and c
 | `npm run build` | Verify the production build |
 | `npm run audit:prod` | Fail on known high or critical production dependency advisories |
 
-Checks and builds require no API credentials. Tests replace the provider SDK, clear provider environment settings, and block global `fetch` so they do not spend API credits. Current coverage exercises chat provider selection, bounded model context, demo/missing-key paths, audio handoff, and provider failure redaction. Add request-validation and browser voice lifecycle regression tests as those fixes land; this initial suite does not establish that those pending security issues are fixed.
+Checks and builds require no API credentials. Tests replace the provider SDK, clear provider environment settings, and block global `fetch` so they do not spend API credits. Current coverage exercises chat provider selection, bounded model context, demo/missing-key paths, audio handoff, provider failure redaction, and runtime chat request validation. Invalid envelopes, content types, modes, and privileged roles are rejected before provider construction, including invalid messages outside the retained history window. Browser voice lifecycle regression coverage remains separate work; these tests do not establish that other pending security issues are fixed.
 
 GitHub Actions runs on pushes and pull requests, installs with `npm ci`, runs `npm run check`, and applies the production audit gate. It has read-only repository permissions and receives no application secrets. To enforce these checks before merging, configure branch protection to require the **Lint, types, tests, and build** check.
 

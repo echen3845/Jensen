@@ -58,12 +58,17 @@ function getProviderConfig() {
   };
 }
 
-function parseChatMode(mode: unknown): ChatMode {
-  if (mode === "unhinged" || mode === "flirty" || mode === "therapist") {
-    return mode;
+function isChatMessage(value: unknown): value is ChatMessage {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
   }
 
-  return "standard";
+  const message = value as Record<string, unknown>;
+  return (message.role === "user" || message.role === "assistant") && typeof message.content === "string";
+}
+
+function isChatMode(value: unknown): value is ChatMode {
+  return value === "standard" || value === "unhinged" || value === "flirty" || value === "therapist";
 }
 
 function getDemoReply(messages: ChatMessage[]) {
@@ -90,12 +95,27 @@ function isQuotaError(error: OpenAIErrorLike) {
 }
 
 export async function POST(request: Request) {
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+  }
+
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return NextResponse.json({ error: "Invalid chat payload." }, { status: 400 });
+  }
+
+  const payload = body as Record<string, unknown>;
+  if (!Array.isArray(payload.messages) || !payload.messages.every(isChatMessage) ||
+      (payload.mode !== undefined && !isChatMode(payload.mode))) {
+    return NextResponse.json({ error: "Invalid chat payload." }, { status: 400 });
+  }
+
+  const messages = payload.messages.slice(-12);
+  const chatMode = payload.mode === undefined ? "standard" : payload.mode as ChatMode;
   const demoMode = process.env.JENSEN_DEMO_MODE === "true";
   const provider = getProviderConfig();
-
-  const body = (await request.json()) as { messages?: ChatMessage[]; mode?: unknown };
-  const messages = Array.isArray(body.messages) ? body.messages.slice(-12) : [];
-  const chatMode = parseChatMode(body.mode);
 
   if (messages.length === 0) {
     return NextResponse.json({ reply: "Tell me what you need and I will help." });
