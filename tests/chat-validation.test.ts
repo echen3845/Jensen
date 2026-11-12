@@ -17,7 +17,7 @@ function request(payload: unknown) {
 async function expectRejected(input: Request) {
   const response = await POST(input);
   expect(response.status).toBe(400);
-  expect(await response.json()).toEqual({ error: expect.any(String) });
+  expect(await response.json()).toMatchObject({ error: expect.any(String) });
   expect(MockOpenAI).not.toHaveBeenCalled();
   expect(createResponse).not.toHaveBeenCalled();
   expect(fetch).not.toHaveBeenCalled();
@@ -97,11 +97,12 @@ describe("chat request validation", () => {
       });
       expect(createResponse).toHaveBeenCalledWith({
         model: "test-chat-model",
+        max_output_tokens: 1024,
         input: [
           { role: "system", content: expect.stringContaining(`Mode: ${mode ?? "standard"}.`) },
           ...messages
         ]
-      });
+      }, expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000, maxRetries: 0 }));
       expect(fetch).not.toHaveBeenCalled();
     }
   );

@@ -98,6 +98,33 @@ GitHub Actions runs on pushes and pull requests, installs with `npm ci`, runs `n
 
 The audit gate is separate from local `check` because it needs registry access. Investigate high/critical production advisories and update compatible versions before merging; do not use `npm audit fix --force` without reviewing breaking changes. Run `npm audit` to inspect development dependencies as well. A clean audit only reports known package advisories and does not replace application security review.
 
+## Request and recording limits
+
+Both paid routes apply application limits before provider submission. Chat JSON and multipart uploads are read incrementally; missing or false `Content-Length` headers cannot bypass the measured byte cap. Compressed request bodies are rejected. The upload envelope is capped at the audio byte limit plus 16 KiB, and exactly one audio file is allowed.
+
+Configure these server-side environment variables as needed. Values must be integers within the indicated range; absent, invalid, or out-of-range values fall back to the bounded default.
+
+| Variable | Default | Allowed range | Meaning |
+| --- | ---: | ---: | --- |
+| `JENSEN_CHAT_BODY_BYTES` | 65,536 | 1–1,048,576 | Entire chat JSON request |
+| `JENSEN_MAX_MESSAGES` | 32 | 1–128 | Submitted messages, checked before retaining context |
+| `JENSEN_MESSAGE_BYTES` | 8,192 | 1–65,536 | UTF-8 bytes per message, including older submitted messages |
+| `JENSEN_MODEL_INPUT_BYTES` | 24,000 | 1–131,072 | System prompt and selected messages, plus 128 bytes of framing allowance per message |
+| `JENSEN_MODEL_OUTPUT_TOKENS` | 1,024 | 1–8,192 | Provider `max_output_tokens` |
+| `JENSEN_AUDIO_BYTES` | 4,194,304 | 1–16,777,216 | Audio file size |
+| `JENSEN_AUDIO_SECONDS` | 60 | 1–300 | Maximum parsed audio end time/span |
+| `JENSEN_BODY_TIMEOUT_MS` | 15,000 | 1–60,000 | Time allowed to receive the body |
+| `JENSEN_PROVIDER_TIMEOUT_MS` | 30,000 | 1–120,000 | Whole processing deadline, including audio inspection and all provider retries |
+| `JENSEN_PROVIDER_RETRIES` | 0 | 0–2 | SDK retries within that shared deadline |
+
+The model input budget uses UTF-8 bytes with framing allowance instead of claiming an exact tokenizer count across providers. It retains a contiguous suffix of up to 12 messages, drops older context first, and rejects a latest message that cannot fit. Choose compatible body, message, context, and model limits; smaller limits can reject requests that previously worked. Durable memory and summarization remain separate work.
+
+The server inspects WebM/Opus, MP4/M4A, and WAV containers with Mediabunny using in-memory bytes, checks declared type against the detected container, requires one audio track with no video, and verifies finite duration before sending anything to the transcriber. This parses containers and timing; it does not decode every compressed sample. Corrupt/unsupported recordings return 415, oversized/over-duration requests return 413, malformed payloads return 400, stalled body reads return 408, processing timeouts return 504, and client cancellations return 499. Missing transcription credentials return 503. Resource failures contain a human-readable `error` and machine-readable `code`; full provider error unification remains #28.
+
+The server page supplies public limits to the client at request time. Recording uses short chunks, discards captures that exceed the byte cap, stops slightly before the duration limit to allow a final flush, and releases microphone tracks/timers on stop, error, or disposal. Upload names follow the actual recorded format. The server remains authoritative when browser timers are delayed. Client requests have a timeout covering the body and processing budgets.
+
+In production, set reverse-proxy/platform body caps and timeouts as well: some infrastructure buffers uploads before the route runs or imposes a lower limit. Cancelled requests abort SDK calls and dispose audio readers, but cancellation cannot undo provider work already accepted. These per-request bounds do not replace authentication, distributed concurrency limits, or per-user spend quotas (#2/#21). No quota reservations are introduced here.
+
 ## Next milestones
 
 - Wake-word mode uses the browser's native speech recognition API. Browsers that do not expose that API can still use the mic button recording fallback, but they cannot do local wake-word detection yet.
