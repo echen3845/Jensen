@@ -100,7 +100,7 @@ describe("chat request validation", () => {
         max_output_tokens: 1024,
         input: [
           { role: "system", content: expect.stringContaining(`Mode: ${mode ?? "standard"}.`) },
-          ...messages
+          messages.at(-1)!
         ]
       }, expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000, maxRetries: 0 }));
       expect(fetch).not.toHaveBeenCalled();

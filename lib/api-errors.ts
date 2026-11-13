@@ -46,12 +46,18 @@ export async function apiRoute(
   let code = "internal_error";
   try {
     const response = await handle(request);
+    if (response.status >= 300 && response.status < 400) {
+      status=response.status; code="redirect";
+      response.headers.set("x-request-id",requestId);
+      response.headers.set("cache-control","no-store");
+      return response;
+    }
     const body = await response.json();
     if (!response.ok) throw new ApiError(response.status, body.code || "invalid_request", body.error || "Request failed.");
     status = response.status;
     code = "ok";
     return NextResponse.json({ ...body, ok: true, requestId }, {
-      status, headers: { "x-request-id": requestId, "cache-control": "no-store" }
+      status, headers: new Headers([...response.headers, ["x-request-id",requestId], ["cache-control","no-store"]])
     });
   } catch (error) {
     const failure = classifyError(error);

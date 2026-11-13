@@ -5,6 +5,9 @@ import type { ClientLimits } from "../lib/resource-limits";
 import { startBoundedRecording } from "../lib/recording";
 import { buildChatRequest } from "../lib/client-chat";
 import { failureMessage } from "../lib/api-contract";
+import { useRouter } from "next/navigation";
+import type { Identity } from "../lib/auth";
+import { useHistory } from "../lib/use-history";
 
 type Message = {
   id: string;
@@ -65,7 +68,7 @@ const chatModes: { id: ChatMode; label: string }[] = [
 ];
 
 function createId() {
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return crypto.randomUUID();
 }
 
 function stripWakeWord(transcript: string) {
@@ -103,39 +106,10 @@ function getFinalTranscript(event: SpeechRecognitionEventLike) {
   return transcripts.join(" ").trim();
 }
 
-function isValidMessage(value: unknown): value is Message {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    ("role" in value ? (value as Message).role === "user" || (value as Message).role === "assistant" : false) &&
-    typeof (value as Message).content === "string"
-  );
-}
-
-function getInitialMessages() {
-  if (typeof window === "undefined") {
-    return starterMessages;
-  }
-
-  const savedMessages = window.localStorage.getItem("jensen.messages");
-  if (!savedMessages) {
-    return starterMessages;
-  }
-
-  try {
-    const parsedMessages = JSON.parse(savedMessages) as unknown;
-    if (Array.isArray(parsedMessages) && parsedMessages.every(isValidMessage)) {
-      return parsedMessages;
-    }
-  } catch {
-    window.localStorage.removeItem("jensen.messages");
-  }
-
-  return starterMessages;
-}
-
-export default function Assistant({ limits }: { limits: ClientLimits }) {
-  const [messages, setMessages] = useState<Message[]>(getInitialMessages);
+export default function Assistant({ limits,identity }: { limits: ClientLimits;identity:Identity|null }) {
+  const router=useRouter();
+  const history=useHistory(identity?.id||null,starterMessages);
+  const {messages,setMessages}=history;
   const [input, setInput] = useState("");
   const [isThinking, setIsThinking] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -170,7 +144,6 @@ export default function Assistant({ limits }: { limits: ClientLimits }) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    window.localStorage.setItem("jensen.messages", JSON.stringify(messages));
     messagesRef.current = messages;
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -254,7 +227,7 @@ export default function Assistant({ limits }: { limits: ClientLimits }) {
 
   async function sendMessage(rawContent = input) {
     const content = rawContent.trim();
-    if (!content || isThinkingRef.current) return;
+    if (!content || isThinkingRef.current || !history.ready) return;
 
     const userMessage: Message = {
       id: createId(),
@@ -278,13 +251,15 @@ export default function Assistant({ limits }: { limits: ClientLimits }) {
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json",
+          ...(history.conversationId ? {"x-conversation-id":history.conversationId,"x-client-message-id":userMessage.id} : {}) },
         body: request.body,
         signal: AbortSignal.timeout(limits.requestTimeoutMs)
       });
 
-      const data = (await response.json()) as { reply?: string; error?: string };
+      const data = (await response.json()) as { reply?: string; error?: string; code?: string };
       if (!response.ok) {
+        if(data.code==="authentication_required"||response.status===404)history.clearScope();
         setStatus(data.error || "Request failed. Please try again.");
         return;
       }
@@ -515,7 +490,7 @@ export default function Assistant({ limits }: { limits: ClientLimits }) {
     window.speechSynthesis?.cancel();
     setMessages(starterMessages);
     messagesRef.current = starterMessages;
-    window.localStorage.removeItem("jensen.messages");
+    void history.create().catch(()=>setStatus("Unable to create conversation."));
     setStatus("Conversation cleared");
   }
 
@@ -526,6 +501,16 @@ export default function Assistant({ limits }: { limits: ClientLimits }) {
           <div>
             <p className="eyebrow">Personal AI</p>
             <h1>Jensen</h1>
+            <p>{identity?.email|| (identity?"Signed in":"Demo: no live actions")}</p>
+            {identity ? <button type="button" onClick={async()=>{
+              const response=await fetch("/api/auth/signout",{method:"POST"});
+              if(response.ok){setMessages(starterMessages);router.refresh();}
+              else setStatus("Sign-out failed. Please try again.");
+            }}>Sign out</button>:null}
+            {identity ? <select aria-label="Conversation" value={history.conversationId||""} onChange={e=>void history.select(e.target.value)}>
+              {history.items.map(item=><option key={item.id} value={item.id}>{item.title}</option>)}
+            </select>:null}
+            {history.error?<p role="alert">{history.error}</p>:null}
           </div>
           <div className="status" aria-live="polite">
             <span className={isThinking || isListening ? "pulse active" : "pulse"} />
@@ -540,6 +525,10 @@ export default function Assistant({ limits }: { limits: ClientLimits }) {
             </div>
           </div>
 
+          {identity?<div>
+            <button type="button" disabled={!history.hasMore} onClick={()=>void history.older().catch(()=>setStatus("Unable to load earlier messages."))}>Earlier messages</button>
+            <button type="button" onClick={()=>void history.latest().catch(()=>setStatus("Unable to restore latest messages."))}>Latest messages</button>
+          </div>:null}
           <div className="messages">
             {messages.map((message) => (
               <article className={`message ${message.role}`} key={message.id}>
@@ -629,7 +618,7 @@ export default function Assistant({ limits }: { limits: ClientLimits }) {
             Wake word
           </label>
           <button type="button" onClick={clearConversation}>
-            Clear
+            New conversation
           </button>
         </footer>
       </section>
