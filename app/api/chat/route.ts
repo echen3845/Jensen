@@ -1,8 +1,9 @@
+import { apiRoute, ApiError } from "../../../lib/api-errors";
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import { getResourceLimits } from "../../../lib/resource-limits";
 import { budgetMessages } from "../../../lib/chat-budget";
-import { readLimitedJson, resourceError, withDeadline } from "../../../lib/request-resources";
+import { readLimitedJson, withDeadline } from "../../../lib/request-resources";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -11,12 +12,6 @@ type ChatMessage = {
 
 type ChatMode = "standard" | "unhinged" | "flirty" | "therapist";
 
-type OpenAIErrorLike = {
-  status?: number;
-  code?: string;
-  type?: string;
-  message?: string;
-};
 
 const modeInstructions: Record<ChatMode, string> = {
   standard:
@@ -92,17 +87,8 @@ function getDemoReply(messages: ChatMessage[]) {
   return "Demo mode online. I can run the interface, voice controls, and local workflow without API credits. Connect billing later to enable live AI reasoning.";
 }
 
-function isQuotaError(error: OpenAIErrorLike) {
-  const text = `${error.code || ""} ${error.type || ""} ${error.message || ""}`.toLowerCase();
-  return error.status === 429 || text.includes("quota") || text.includes("billing") || text.includes("credit");
-}
-
 export async function POST(request: Request) {
-  try {
-    return await handleChat(request);
-  } catch (error) {
-    return resourceError(error) || NextResponse.json({ error: "Unable to process chat request." }, { status: 500 });
-  }
+  return apiRoute(request, "chat", handleChat);
 }
 
 async function handleChat(request: Request) {
@@ -132,14 +118,7 @@ async function handleChat(request: Request) {
     return NextResponse.json({ reply: getDemoReply(messages), mode: "demo" });
   }
 
-  if (!provider.apiKey) {
-    return NextResponse.json(
-      {
-        reply: provider.missingKeyReply
-      },
-      { status: 200 }
-    );
-  }
+  if (!provider.apiKey) throw new ApiError(503, "provider_configuration", "The chat provider is not configured.");
 
   const client = new OpenAI({
     apiKey: provider.apiKey,
@@ -148,7 +127,6 @@ async function handleChat(request: Request) {
     maxRetries: limits.providerRetries
   });
 
-  try {
     const response = await withDeadline(request.signal, limits.providerTimeoutMs, (signal) => client.responses.create({
       model: provider.model,
       max_output_tokens: limits.outputTokens,
@@ -170,32 +148,4 @@ async function handleChat(request: Request) {
       provider: provider.label,
       chatMode
     });
-  } catch (error) {
-    const bounded = resourceError(error);
-    if (bounded) return bounded;
-    if (error instanceof Error && error.name === "APIConnectionTimeoutError") {
-      return NextResponse.json({ error: "Chat deadline exceeded.", code: "request_timeout" }, { status: 504 });
-    }
-    const openAIError = error as OpenAIErrorLike;
-
-    if (isQuotaError(openAIError)) {
-      return NextResponse.json(
-        {
-          reply:
-            `Your ${provider.label} key is configured, but the account is out of API credits or billing is unavailable. Set JENSEN_DEMO_MODE=true in .env.local to use Jensen locally until credits are restored.`,
-          mode: "blocked"
-        },
-        { status: 200 }
-      );
-    }
-
-    return NextResponse.json(
-      {
-        reply:
-          `I could not reach the live ${provider.label} AI service. Check your key, model, credits, and network access. You can keep testing the app by setting JENSEN_DEMO_MODE=true in .env.local.`,
-        mode: "error"
-      },
-      { status: 200 }
-    );
-  }
 }

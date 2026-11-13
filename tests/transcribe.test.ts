@@ -15,7 +15,7 @@ describe("transcription provider boundary", () => {
 
     expect(await response.json()).toMatchObject({
       text: "",
-      error: expect.stringContaining("not configured")
+      code: "provider_configuration"
     });
     expect(MockOpenAI).not.toHaveBeenCalled();
   });
@@ -39,7 +39,7 @@ describe("transcription provider boundary", () => {
 
     const response = await POST(recordingRequest(audio));
 
-    expect(await response.json()).toEqual({ text: "Plan tomorrow" });
+    expect(await response.json()).toMatchObject({ text: "Plan tomorrow" });
     expect(createTranscription).toHaveBeenCalledWith({
       model: "test-transcription-model",
       file: expect.any(File)
@@ -58,7 +58,7 @@ describe("transcription provider boundary", () => {
     const body = await response.json();
 
     expect(body.text).toBe("");
-    expect(body.error).toContain("could not transcribe");
+    expect(body.code).toBe("internal_error");
     expect(JSON.stringify(body)).not.toContain("private-test-key");
     expect(JSON.stringify(body)).not.toContain("internal detail");
   });
