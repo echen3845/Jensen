@@ -8,6 +8,8 @@ import { failureMessage } from "../lib/api-contract";
 import { useRouter } from "next/navigation";
 import type { Identity } from "../lib/auth";
 import { useHistory } from "../lib/use-history";
+import { useVoice } from "../lib/use-voice";
+import { ConversationScope } from "../lib/conversation-scope";
 
 type Message = {
   id: string;
@@ -16,33 +18,6 @@ type Message = {
 };
 
 type ChatMode = "standard" | "unhinged" | "flirty" | "therapist";
-
-type SpeechRecognitionConstructor = new () => SpeechRecognition;
-
-type SpeechRecognitionEventLike = Event & {
-  results: SpeechRecognitionResultList;
-  resultIndex: number;
-};
-
-type SpeechRecognition = EventTarget & {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start: () => void;
-  stop: () => void;
-  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
-  onend: (() => void) | null;
-  onerror: (() => void) | null;
-};
-
-declare global {
-  interface Window {
-    SpeechRecognition?: SpeechRecognitionConstructor;
-    webkitSpeechRecognition?: SpeechRecognitionConstructor;
-  }
-}
-
-type RecognitionMode = "manual" | "hands-free";
 
 const starterMessages: Message[] = [
   {
@@ -71,41 +46,6 @@ function createId() {
   return crypto.randomUUID();
 }
 
-function stripWakeWord(transcript: string) {
-  return transcript.replace(/^.*?\bjensen\b[,.!?\s-]*/i, "").trim();
-}
-
-function includesWakeWord(transcript: string) {
-  return /\bjensen\b/i.test(transcript);
-}
-
-function includesDismissal(transcript: string) {
-  return /\b(dismiss|stand down|go to sleep|that's all|that'?ll be all|that is all|that will be all|stop listening|thank you jensen)\b/i.test(
-    transcript
-  );
-}
-
-function stripAfterDismissal(transcript: string) {
-  return transcript
-    .split(
-      /\b(?:dismiss|stand down|go to sleep|that's all|that'?ll be all|that is all|that will be all|stop listening|thank you jensen)\b/i
-    )[0]
-    .trim();
-}
-
-function getFinalTranscript(event: SpeechRecognitionEventLike) {
-  const transcripts: string[] = [];
-
-  for (let index = event.resultIndex; index < event.results.length; index += 1) {
-    const result = event.results[index];
-    if (result.isFinal) {
-      transcripts.push(result[0]?.transcript || "");
-    }
-  }
-
-  return transcripts.join(" ").trim();
-}
-
 export default function Assistant({ limits,identity }: { limits: ClientLimits;identity:Identity|null }) {
   const router=useRouter();
   const history=useHistory(identity?.id||null,starterMessages);
@@ -114,116 +54,30 @@ export default function Assistant({ limits,identity }: { limits: ClientLimits;id
   const [isThinking, setIsThinking] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
-  const [voiceInputAvailable] = useState(() => {
-    if (typeof window === "undefined") {
-      return false;
-    }
-
-    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recorderSupported =
-      typeof navigator.mediaDevices?.getUserMedia === "function" &&
-      typeof window.MediaRecorder !== "undefined";
-
-    return Boolean(Recognition) || recorderSupported;
-  });
-  const [handsFreeEnabled, setHandsFreeEnabled] = useState(false);
-  const [assistantAwake, setAssistantAwake] = useState(false);
   const [chatMode, setChatMode] = useState<ChatMode>("standard");
   const [status, setStatus] = useState("Systems ready");
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
-  const recognitionModeRef = useRef<RecognitionMode>("manual");
-  const handsFreeEnabledRef = useRef(false);
-  const assistantAwakeRef = useRef(false);
   const isThinkingRef = useRef(false);
   const messagesRef = useRef<Message[]>(messages);
   const recordingRef = useRef<ReturnType<typeof startBoundedRecording> | null>(null);
   const recordingGenerationRef = useRef({ value: 0 });
   const recordingActiveRef = useRef(false);
-  const restartRecognitionTimeoutRef = useRef<number | null>(null);
-  const handleVoiceTranscriptRef = useRef<(transcript: string) => Promise<void>>(async () => {});
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const scope=useRef(new ConversationScope());
+  const voice=useVoice({spoken:voiceEnabled,onCapture:setIsListening,onStatus:setStatus,
+    onCommand:async text=>{setInput(text);await sendMessage(text);},
+    onDismiss:reason=>cancelActive(reason==="unmount")});
+  const voiceInputAvailable=voice.mode!=="none";
+  const speak=voice.speak;
+  function cancelActive(unmount=false){
+    scope.current.cancel();recordingRef.current?.dispose();
+    recordingRef.current=null;recordingActiveRef.current=false;recordingGenerationRef.current.value++;
+    if(!unmount){setIsThinking(false);isThinkingRef.current=false;}
+  }
 
   useEffect(() => {
     messagesRef.current = messages;
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
-
-  useEffect(() => {
-    handsFreeEnabledRef.current = handsFreeEnabled;
-  }, [handsFreeEnabled]);
-
-  useEffect(() => {
-    assistantAwakeRef.current = assistantAwake;
-  }, [assistantAwake]);
-
-  useEffect(() => {
-    isThinkingRef.current = isThinking;
-  }, [isThinking]);
-
-  useEffect(() => {
-    const recordingGeneration = recordingGenerationRef.current;
-    return () => {
-      if (restartRecognitionTimeoutRef.current !== null) {
-        window.clearTimeout(restartRecognitionTimeoutRef.current);
-      }
-
-      recognitionRef.current?.stop();
-
-      recordingGeneration.value++;
-      recordingActiveRef.current = false;
-      recordingRef.current?.dispose();
-    };
-  }, []);
-
-  useEffect(() => {
-    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!Recognition) return;
-
-    const recognition = new Recognition();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = "en-US";
-    recognition.onresult = (event) => {
-      const transcript = getFinalTranscript(event);
-
-      if (transcript) {
-        void handleVoiceTranscriptRef.current(transcript);
-      }
-    };
-    recognition.onend = () => {
-      setIsListening(false);
-
-      if (handsFreeEnabledRef.current) {
-        if (restartRecognitionTimeoutRef.current !== null) {
-          window.clearTimeout(restartRecognitionTimeoutRef.current);
-        }
-
-        restartRecognitionTimeoutRef.current = window.setTimeout(() => {
-          restartRecognitionTimeoutRef.current = null;
-          startNativeRecognition("hands-free");
-        }, 350);
-      }
-    };
-    recognition.onerror = () => {
-      setStatus("Voice input paused");
-      setIsListening(false);
-    };
-
-    recognitionRef.current = recognition;
-  }, []);
-
-  function speak(text: string) {
-    if (!voiceEnabled || typeof window === "undefined" || !window.speechSynthesis) {
-      return;
-    }
-
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1;
-    utterance.pitch = 0.95;
-    utterance.volume = 0.9;
-    window.speechSynthesis.speak(utterance);
-  }
 
   async function sendMessage(rawContent = input) {
     const content = rawContent.trim();
@@ -248,16 +102,19 @@ export default function Assistant({ limits,identity }: { limits: ClientLimits;id
     isThinkingRef.current = true;
     setStatus("Thinking");
 
+    const operation=scope.current.begin(limits.requestTimeoutMs);
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json",
           ...(history.conversationId ? {"x-conversation-id":history.conversationId,"x-client-message-id":userMessage.id} : {}) },
         body: request.body,
-        signal: AbortSignal.timeout(limits.requestTimeoutMs)
+        signal: operation.signal
       });
 
+      if(!operation.usable())return;
       const data = (await response.json()) as { reply?: string; error?: string; code?: string };
+      if(!operation.usable())return;
       if (!response.ok) {
         if(data.code==="authentication_required"||response.status===404)history.clearScope();
         setStatus(data.error || "Request failed. Please try again.");
@@ -275,66 +132,18 @@ export default function Assistant({ limits,identity }: { limits: ClientLimits;id
         messagesRef.current = updated;
         return updated;
       });
-      setStatus(handsFreeEnabledRef.current ? "Jensen awake" : "Systems ready");
+      setStatus(voice.isHandsFree() ? "Jensen awake" : "Systems ready");
       speak(reply);
     } catch (error) {
+      if(!operation.current())return;
       setStatus(failureMessage(error));
     } finally {
+      const current=operation.current();operation.finish();
+      if(!current)return;
       setIsThinking(false);
       isThinkingRef.current = false;
     }
   }
-
-  async function handleVoiceTranscript(rawTranscript: string) {
-    const transcript = rawTranscript.trim();
-    if (!transcript) return;
-
-    if (recognitionModeRef.current !== "hands-free") {
-      setInput(transcript);
-      await sendMessage(transcript);
-      return;
-    }
-
-    if (!assistantAwakeRef.current) {
-      if (!includesWakeWord(transcript)) {
-        setStatus("Awaiting wake word");
-        return;
-      }
-
-      setAssistantAwake(true);
-      assistantAwakeRef.current = true;
-      setStatus("Jensen awake");
-
-      const command = stripWakeWord(transcript);
-      if (command) {
-        setInput(command);
-        await sendMessage(command);
-      } else {
-        speak("I'm listening.");
-      }
-      return;
-    }
-
-    if (includesDismissal(transcript)) {
-      const commandBeforeDismissal = stripAfterDismissal(transcript);
-
-      if (commandBeforeDismissal) {
-        setInput(commandBeforeDismissal);
-        await sendMessage(commandBeforeDismissal);
-      }
-
-      setAssistantAwake(false);
-      assistantAwakeRef.current = false;
-      setStatus("Awaiting wake word");
-      speak("Standing by.");
-      return;
-    }
-
-    setInput(transcript);
-    await sendMessage(transcript);
-  }
-
-  handleVoiceTranscriptRef.current = handleVoiceTranscript;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -343,6 +152,7 @@ export default function Assistant({ limits,identity }: { limits: ClientLimits;id
 
   async function transcribeRecording(audio: Blob) {
     setStatus("Transcribing");
+    const operation=scope.current.begin(limits.requestTimeoutMs);
 
     try {
       const formData = new FormData();
@@ -352,9 +162,10 @@ export default function Assistant({ limits,identity }: { limits: ClientLimits;id
       const response = await fetch("/api/transcribe", {
         method: "POST",
         body: formData,
-        signal: AbortSignal.timeout(limits.requestTimeoutMs)
+        signal: operation.signal
       });
       const data = (await response.json()) as { text?: string; error?: string };
+      if(!operation.usable())return;
       const transcript = data.text?.trim();
 
       if (!transcript) {
@@ -365,8 +176,8 @@ export default function Assistant({ limits,identity }: { limits: ClientLimits;id
       setInput(transcript);
       await sendMessage(transcript);
     } catch {
-      setStatus("Voice transcription failed");
-    }
+      if(operation.current())setStatus("Voice transcription failed");
+    } finally {operation.finish();}
   }
 
   function getRecorderOptions() {
@@ -423,71 +234,13 @@ export default function Assistant({ limits,identity }: { limits: ClientLimits;id
     }
   }
 
-  function startNativeRecognition(mode: RecognitionMode) {
-    if (!recognitionRef.current) return false;
-
-    try {
-      recognitionModeRef.current = mode;
-      recognitionRef.current.continuous = mode === "hands-free";
-      recognitionRef.current.start();
-      setIsListening(true);
-      setStatus(
-        mode === "hands-free"
-          ? assistantAwakeRef.current
-            ? "Jensen awake"
-            : "Awaiting wake word"
-          : "Listening"
-      );
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async function toggleListening() {
-    if (isListening) {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
-      recordingRef.current?.stop();
-      setIsListening(false);
-      return;
-    }
-
-    if (!recognitionRef.current) {
-      await startRecordingFallback();
-      return;
-    }
-
-    startNativeRecognition("manual");
-  }
-
-  async function toggleHandsFree() {
-    if (handsFreeEnabledRef.current) {
-      handsFreeEnabledRef.current = false;
-      setHandsFreeEnabled(false);
-      setAssistantAwake(false);
-      assistantAwakeRef.current = false;
-      recognitionRef.current?.stop();
-      setIsListening(false);
-      setStatus("Hands-free off");
-      return;
-    }
-
-    if (!recognitionRef.current) {
-      setStatus("Wake word needs browser speech recognition");
-      return;
-    }
-
-    handsFreeEnabledRef.current = true;
-    setHandsFreeEnabled(true);
-    setAssistantAwake(false);
-    assistantAwakeRef.current = false;
-    startNativeRecognition("hands-free");
+  async function toggleListening(){
+    if(isListening){if(recordingRef.current)recordingRef.current.stop();else voice.stopListening();return;}
+    if(voice.mode==="native")voice.startManual();else await startRecordingFallback();
   }
 
   function clearConversation() {
-    window.speechSynthesis?.cancel();
+    voice.stopListening();voice.stopSpeaking();cancelActive();
     setMessages(starterMessages);
     messagesRef.current = starterMessages;
     void history.create().catch(()=>setStatus("Unable to create conversation."));
@@ -503,11 +256,12 @@ export default function Assistant({ limits,identity }: { limits: ClientLimits;id
             <h1>Jensen</h1>
             <p>{identity?.email|| (identity?"Signed in":"Demo: no live actions")}</p>
             {identity ? <button type="button" onClick={async()=>{
+              voice.stopListening();voice.stopSpeaking();cancelActive();
               const response=await fetch("/api/auth/signout",{method:"POST"});
               if(response.ok){setMessages(starterMessages);router.refresh();}
               else setStatus("Sign-out failed. Please try again.");
             }}>Sign out</button>:null}
-            {identity ? <select aria-label="Conversation" value={history.conversationId||""} onChange={e=>void history.select(e.target.value)}>
+            {identity ? <select aria-label="Conversation" value={history.conversationId||""} onChange={e=>void (voice.stopListening(),voice.stopSpeaking(),cancelActive(),history.select(e.target.value))}>
               {history.items.map(item=><option key={item.id} value={item.id}>{item.title}</option>)}
             </select>:null}
             {history.error?<p role="alert">{history.error}</p>:null}
@@ -578,7 +332,7 @@ export default function Assistant({ limits,identity }: { limits: ClientLimits;id
             className={isListening ? "iconButton active" : "iconButton"}
             type="button"
             onClick={() => void toggleListening()}
-            aria-label={isListening ? "Stop listening" : "Start listening"}
+            aria-label={isListening ? (voice.mode==="recording" ? "Finish recording" : "Stop microphone") : "Start listening"}
             title={voiceInputAvailable ? "Voice input" : "Voice input unavailable"}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -600,7 +354,10 @@ export default function Assistant({ limits,identity }: { limits: ClientLimits;id
           </button>
         </form>
 
+        <p>Hands-free recognition may send audio to your browser speech service before the wake word is detected. It is not local wake-word detection or identity verification.</p>
         <footer className="controls">
+          <button type="button" onClick={()=>voice.stopSpeaking()}>Stop speaking</button>
+          <button type="button" onClick={()=>{voice.stopListening();voice.stopSpeaking();cancelActive();setStatus("Request stopped. Already completed server work remains.");}}>Stop request</button>
           <label>
             <input
               type="checkbox"
@@ -612,10 +369,10 @@ export default function Assistant({ limits,identity }: { limits: ClientLimits;id
           <label>
             <input
               type="checkbox"
-              checked={handsFreeEnabled}
-              onChange={() => void toggleHandsFree()}
+              checked={voice.handsFreeEnabled}
+              onChange={() => voice.toggleHandsFree()}
             />
-            Wake word
+            Hands-free (foreground only)
           </label>
           <button type="button" onClick={clearConversation}>
             New conversation
