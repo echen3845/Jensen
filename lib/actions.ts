@@ -2,6 +2,8 @@ import {randomUUID} from "node:crypto";
 import type {PoolClient} from "pg";
 import {ApiError} from "./api-errors";
 import {transaction} from "./db";
+import {taskLock,assertFence} from "./task-lock";
+import {wakeTask} from "./queue";
 import {digest,argumentFingerprint,type Tool,type ToolContext} from "./tool-contracts";
 import {containsSecret,safeData} from "./secrets";
 const financial=new Set(["external-message","paid-cancellation","purchase","commitment"]);
@@ -25,6 +27,9 @@ async function event(client:PoolClient,row:Action,kind:string,data:unknown={}){
  await client.query("INSERT INTO action_events(user_id,task_id,action_id,kind,data) VALUES($1,$2,$3,$4,$5)",[row.user_id,row.task_id,row.id,kind,safeData(data)]);
 }
 async function rowFor(client:PoolClient,user:string,id:string){
+ const owner=(await client.query("SELECT task_id FROM actions WHERE id=$1 AND user_id=$2",[id,user])).rows[0];
+ if(!owner)throw new ApiError(404,"not_found","Action not found.");
+ await taskLock(client,owner.task_id);
  const row=(await client.query("SELECT *,expires_at>now() AS live FROM actions WHERE id=$1 AND user_id=$2 FOR UPDATE",[id,user])).rows[0] as Action|undefined;
  if(!row)throw new ApiError(404,"not_found","Action not found.");return row;
 }
@@ -34,7 +39,8 @@ export async function prepareAction(context:ToolContext,key:string,tool:Tool,inp
  if(Buffer.byteLength(encoded)>8192||containsSecret(encoded))throw new ApiError(400,"unsafe_arguments","Tool arguments contain unsupported or sensitive data.");
  const argumentHash=argumentFingerprint(tool,args);
  return transaction(async client=>{
-  await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[context.taskId+":"+key]);
+  await taskLock(client,context.taskId);
+  await assertFence(client,context.userId,context.taskId,context.leaseToken);
   const task=await client.query("SELECT id FROM tasks WHERE id=$1 AND user_id=$2 AND status NOT IN ('cancelled','failed','succeeded')",[context.taskId,context.userId]);
   if(!task.rowCount)throw new ApiError(409,"task_inactive","Task is no longer active.");
   const existing=(await client.query("SELECT * FROM actions WHERE user_id=$1 AND task_id=$2 AND action_key=$3",[context.userId,context.taskId,key])).rows[0] as Action|undefined;
@@ -63,6 +69,7 @@ export async function approveAction(user:string,id:string,expectedHash:string){
   if(row.action_hash!==expectedHash||row.status!=="pending"||!row.live)throw new ApiError(409,"stale_approval","Review the current action or renew its expired preview before approving.");
   await client.query("UPDATE actions SET status='approved' WHERE id=$1 AND user_id=$2",[id,user]);
   await event(client,row,"action_approved",{hash:expectedHash});
+  await wakeTask(client,user,row.task_id);
   return row.task_id;
  },user);
 }
@@ -93,6 +100,7 @@ export async function createGrant(user:string,id:string,expectedHash:string,seco
   if(financial.has(row.effect))throw new ApiError(403,"one_time_required","External messages and financial commitments require one-time approval.");
   const result=await client.query("INSERT INTO permission_grants(user_id,tool,tool_version,argument_hash,expires_at) VALUES($1,$2,$3,$4,now()+($5::int*interval '1 second')) RETURNING id",[user,row.tool,row.tool_version,row.argument_hash,seconds]);
   await event(client,row,"standing_permission_created",{grantId:result.rows[0].id,seconds});
+  await wakeTask(client,user,row.task_id);
   return result.rows[0].id as string;
  },user);
 }
@@ -107,6 +115,7 @@ export async function executeAction(context:ToolContext,actionId:string,tool:Too
  const token=randomUUID();
  const decision=await transaction(async client=>{
   const row=await rowFor(client,context.userId,actionId);
+  await assertFence(client,context.userId,context.taskId,context.leaseToken);
   const task=await client.query("SELECT status FROM tasks WHERE id=$1 AND user_id=$2 FOR SHARE",[context.taskId,context.userId]);
   if(task.rows[0]?.status==="cancelled")throw new ApiError(409,"task_cancelled","Task cancelled.");
   if(row.task_id!==context.taskId||row.tool!==tool.name||row.tool_version!==tool.version||
@@ -136,6 +145,7 @@ export async function executeAction(context:ToolContext,actionId:string,tool:Too
   result={error:uncertain?"action_uncertain":error instanceof ApiError?error.code:"tool_failed",completed:false,uncertain};
  }
  await transaction(async client=>{
+  await taskLock(client,context.taskId);
   const updated=await client.query("UPDATE actions SET status=$4,result=$5 WHERE id=$1 AND user_id=$2 AND execution_token=$3 AND status='running' RETURNING id",[actionId,context.userId,token,uncertain?"uncertain":failed?"failed":"succeeded",result]);
   if(updated.rowCount)await event(client,decision.row,failed?"action_failed":"action_completed",result);
  },context.userId);
