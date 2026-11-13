@@ -47,5 +47,7 @@ jobs:
         run: npm run check
       - name: Verify PostgreSQL integration
         run: npm run test:integration
+      - name: Smoke-test independent worker entrypoint
+        run: DATABASE_URL="$TEST_DATABASE_URL" npm run worker -- --once
       - name: Audit production dependencies
         run: npm run audit:prod

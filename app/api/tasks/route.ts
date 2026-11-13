@@ -1,6 +1,6 @@
 import {z} from "zod";
 import {parse,uuid} from "../../../lib/store";
-import {newTask,executeInline} from "../../../lib/task-service";
+import {newTask,taskFor} from "../../../lib/task-service";
 import {readLimitedJson} from "../../../lib/request-resources";
 import { NextResponse } from "next/server";
 import { apiRoute } from "../../../lib/api-errors";
@@ -13,5 +13,5 @@ export async function POST(request:Request){return apiRoute(request,"tasks.creat
  const input=parse(z.object({prompt:z.string().min(1).max(8192)}).strict(),await readLimitedJson(r,16384,5000));
  const requestId=r.headers.get("idempotency-key");
  const task=await newTask(user.id,input.prompt,requestId?uuid(requestId):undefined);
- return NextResponse.json({task:task.created?await executeInline(user.id,task.id,r.signal):{id:task.id}}, {status:201});
+ return NextResponse.json({task:await taskFor(user.id,task.id),queued:task.created}, {status:202});
 });}

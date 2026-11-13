@@ -2,7 +2,7 @@ import {createHash} from "node:crypto";
 import {z} from "zod";
 import {ApiError} from "./api-errors";
 export type Effect="read"|"reversible"|"external-message"|"paid-cancellation"|"purchase"|"commitment";
-export type ToolContext={userId:string;taskId:string;signal:AbortSignal;idempotencyKey:string;assertActive:()=>Promise<void>};
+export type ToolContext={userId:string;taskId:string;signal:AbortSignal;idempotencyKey:string;leaseToken?:string;assertActive:()=>Promise<void>};
 export type Tool={
  name:string;version:number;description:string;permissions:string[];effect:Effect;
  approval:"required"|"read-own";idempotent:boolean;schema:Record<string,unknown>;

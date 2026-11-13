@@ -44,7 +44,7 @@ async function handleTranscription(request: Request) {
       const client = new OpenAI({
         apiKey, timeout: limits.providerTimeoutMs, maxRetries: limits.providerRetries
       });
-      const cost=Math.ceil(Math.max(1,seconds)*prices("transcribe")[0]);
+      const cost=Math.ceil(Math.max(1,seconds)*prices("transcribe")[0])*(1+limits.providerRetries);
       return withUsage(user.id,"transcribe",cost,()=>client.audio.transcriptions.create({
         file,
         model: process.env.OPENAI_TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe"

@@ -11,6 +11,7 @@ function number(name:string,fallback:number,max:number){
 }
 export function quotaPolicy(){return{
  daily:number("JENSEN_DAILY_MICRO_USD",1_000_000,1_000_000_000),
+ globalDaily:number("JENSEN_GLOBAL_DAILY_MICRO_USD",10_000_000,1_000_000_000),
  userConcurrency:number("JENSEN_USER_CONCURRENCY",2,20),
  globalConcurrency:number("JENSEN_GLOBAL_CONCURRENCY",8,200),
  requestsPerMinute:number("JENSEN_REQUESTS_PER_MINUTE",30,600),
@@ -25,9 +26,10 @@ export function prices(operation:"chat"|"transcribe"){
 }
 export function chatReservation(messages:{content:string}[],outputTokens:number){
  const [input,output]=prices("chat");
- return messages.reduce((sum,m)=>sum+Buffer.byteLength(m.content)+128,0)*input+outputTokens*output;
+ return (messages.reduce((sum,m)=>sum+Buffer.byteLength(m.content)+128,0)*input+outputTokens*output)*(1+getResourceLimits().providerRetries);
 }
 export function actualChatCost(response:unknown){
+ if(getResourceLimits().providerRetries>0)return undefined;
  const value=response as {usage?:{input_tokens?:number;output_tokens?:number}};
  const i=value.usage?.input_tokens,o=value.usage?.output_tokens;
  if(!Number.isSafeInteger(i)||!Number.isSafeInteger(o)||i!<0||o!<0)return undefined;
@@ -54,7 +56,10 @@ export async function throttleAnonymous(request:Request){
 async function lock(client:PoolClient){await client.query("SELECT pg_advisory_xact_lock(8102510)");}
 async function chargeExpired(client:PoolClient){
  const expired=await client.query("UPDATE provider_leases SET state='charged',final_cost=reservation WHERE state='pending' AND expires_at<=now() RETURNING user_id,bucket,reservation");
- for(const row of expired.rows)await client.query("UPDATE usage_windows SET reserved=reserved-$3::bigint,spent=spent+$3::bigint WHERE user_id=$1 AND bucket=$2",[row.user_id,row.bucket,row.reservation]);
+ for(const row of expired.rows){
+  if(row.user_id)await client.query("UPDATE usage_windows SET reserved=reserved-$3::bigint,spent=spent+$3::bigint WHERE user_id=$1 AND bucket=$2",[row.user_id,row.bucket,row.reservation]);
+  await client.query("UPDATE global_usage_windows SET reserved=reserved-$2::bigint,spent=spent+$2::bigint WHERE bucket=$1",[row.bucket,row.reservation]);
+ }
 }
 export async function reserveUsage(user:string,operation:string,amount:number){
  if(!Number.isSafeInteger(amount)||amount<0)throw new ApiError(503,"invalid_reservation","Unable to calculate resource reservation.");
@@ -65,6 +70,9 @@ export async function reserveUsage(user:string,operation:string,amount:number){
   const active=await client.query("SELECT count(*)::int AS total,count(*) FILTER (WHERE user_id=$1)::int AS owned FROM provider_leases WHERE state='pending'",[user]);
   if(active.rows[0].total>=policy.globalConcurrency||active.rows[0].owned>=policy.userConcurrency)throw new ApiError(429,"concurrency_limited","Other requests are still running. Try again shortly.",5);
   await client.query("INSERT INTO usage_windows(user_id,bucket) VALUES($1,(now() AT TIME ZONE 'UTC')::date) ON CONFLICT DO NOTHING",[user]);
+  await client.query("INSERT INTO global_usage_windows(bucket) VALUES((now() AT TIME ZONE 'UTC')::date) ON CONFLICT DO NOTHING");
+  const global=await client.query("UPDATE global_usage_windows SET reserved=reserved+$1::bigint WHERE bucket=(now() AT TIME ZONE 'UTC')::date AND spent+reserved+$1::bigint<=$2::bigint RETURNING bucket",[amount,policy.globalDaily]);
+  if(!global.rowCount)throw new ApiError(429,"global_budget_exceeded","The service usage budget is exhausted.",60);
   const reserved=await client.query("UPDATE usage_windows SET reserved=reserved+$2::bigint,requests=requests+1 WHERE user_id=$1 AND bucket=(now() AT TIME ZONE 'UTC')::date AND spent+reserved+$2::bigint<=$3::bigint RETURNING bucket",[user,amount,policy.daily]);
   if(!reserved.rowCount)throw new ApiError(429,"budget_exceeded","Daily configured usage budget reached.",60);
   await client.query("INSERT INTO provider_leases(id,user_id,bucket,operation,reservation,expires_at,state) VALUES($1,$2,$3,$4,$5,now()+($6::int*interval '1 millisecond'),'pending')",
@@ -76,7 +84,10 @@ export async function settleUsage(id:string,actual?:number){
  return transaction(async client=>{
   await lock(client);
   const row=(await client.query("UPDATE provider_leases SET state=$2,final_cost=COALESCE($3::bigint,reservation) WHERE id=$1 AND state='pending' RETURNING user_id,bucket,reservation,final_cost",[id,actual===undefined?"charged":"settled",actual??null])).rows[0];
-  if(row)await client.query("UPDATE usage_windows SET reserved=reserved-$3::bigint,spent=spent+$4::bigint WHERE user_id=$1 AND bucket=$2",[row.user_id,row.bucket,row.reservation,row.final_cost]);
+  if(row){
+   if(row.user_id)await client.query("UPDATE usage_windows SET reserved=reserved-$3::bigint,spent=spent+$4::bigint WHERE user_id=$1 AND bucket=$2",[row.user_id,row.bucket,row.reservation,row.final_cost]);
+   await client.query("UPDATE global_usage_windows SET reserved=reserved-$2::bigint,spent=spent+$3::bigint WHERE bucket=$1",[row.bucket,row.reservation,row.final_cost]);
+  }
  });
 }
 export async function withUsage<T>(user:string,operation:string,amount:number,work:()=>Promise<T>,actual?:(result:T)=>number|undefined):Promise<T>{
