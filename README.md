@@ -127,7 +127,7 @@ In production, set reverse-proxy/platform body caps and timeouts as well: some i
 
 ## Next milestones
 
-- Wake-word mode uses the browser's native speech recognition API. Browsers that do not expose that API can still use the mic button recording fallback, but they cannot do local wake-word detection yet.
+- Hands-free uses browser speech recognition and checks transcripts for a wake word; processing may be remote. Browsers without that API use button recording. Neither path implements guaranteed local wake-word detection.
 - Replace browser speech APIs with OpenAI Realtime speech-to-speech
 - Add user-approved tools for reminders, files, calendar, and email drafts
 - Add encrypted long-term memory
@@ -161,3 +161,19 @@ Configure positive integer price ceilings before live calls: JENSEN_CHAT_INPUT_M
 Defaults: JENSEN_DAILY_MICRO_USD=1000000 (one configured dollar per user/day), JENSEN_USER_CONCURRENCY=2, JENSEN_GLOBAL_CONCURRENCY=8, JENSEN_REQUESTS_PER_MINUTE=30, JENSEN_ANONYMOUS_PER_MINUTE=120, JENSEN_IP_PER_MINUTE=10. Values outside their bounded configuration ranges fall back to defaults. Denied authentication, over-budget, over-concurrency, and throttled requests never execute a provider call. Responses use 401/403/429 and bounded Retry-After as applicable.
 
 Anonymous access and sign-in initiation share a global minute bucket. Forwarding headers are ignored unless JENSEN_TRUSTED_IP_HEADER names a single-IP header supplied by a trusted ingress. That ingress must strip/overwrite client values, and application servers must be unreachable directly. Never configure a client-controlled header. Recognized IPs are HMAC-hashed with AUTH_SECRET before storage; raw addresses are neither persisted nor logged. Without a trusted header all anonymous traffic shares a conservative global bucket. Apply edge rate limits too, since rejected traffic still reaches the database. Retention removes old rate windows and settled leases; PostgreSQL availability is required and admissions fail closed on storage failures.
+
+## Voice lifecycle and privacy
+
+Hands-free is an explicit, foreground-only opt-in. The browser speech engine receives audio before Jensen checks the transcript for its name; that engine may use a remote service. This is not guaranteed local wake-word detection, speaker verification, or authentication. Ambient transcripts that do not wake Jensen are discarded by this app, but browser/vendor processing is outside Jensen's control. Native recognition pauses while spoken output plays to avoid feedback; press Stop speaking before a new command. Voice settings and mode changes apply to subsequent native commands without remounting the recognizer.
+
+Controls have distinct meanings: Stop speaking cancels output only; Stop microphone discards native capture and disables hands-free; Finish recording ends a button recording and submits it for transcription; Stop request cancels active chat/transcription and discards late responses; New conversation also resets the request generation. A dismissal phrase discards that utterance and pending response, returning enabled hands-free capture to its wake-word state. Neither stopping capture nor cancelling a client request undoes already completed server actions. Background tasks have their own explicit cancellation and receipts.
+
+| State | Supported behavior |
+| --- | --- |
+| Visible HTTPS desktop/mobile browser | Feature-detected native recognition or button recording fallback; microphone permission required |
+| Hidden tab or pagehide | Capture, pending requests, restart timers, and owned speech stop; hands-free must be enabled again |
+| Locked screen or background iPhone browser | Continuous voice is unsupported; do not rely on it |
+| Closed browser/PWA | Voice capture is unsupported; the manifest does not grant background microphone execution |
+| Always-available local wake word | Requires a separate evaluated local detector/native shell and platform microphone/background entitlements |
+
+Component tests simulate native recognition, settings changes, Strict Mode, visibility loss, and delayed chat/transcription responses; recorder tests cover stop/error/disposal. Physical browser/iPhone microphone checks remain deployment smoke checks, not a claim of always-on support. Always-available voice should be a separately scoped native/local-detector implementation after measuring power, privacy, OS restrictions, and latency. Wake words never authorize tool actions; authenticated server policies and exact action approvals remain mandatory.
