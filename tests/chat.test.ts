@@ -52,11 +52,12 @@ describe("chat provider boundary", () => {
     });
     expect(createResponse).toHaveBeenCalledWith({
       model: "test-chat-model",
+      max_output_tokens: 1024,
       input: [
         { role: "system", content: expect.stringContaining("cannot perform yet") },
         ...messages.slice(-12)
       ]
-    });
+    }, expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000, maxRetries: 0 }));
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -69,10 +70,13 @@ describe("chat provider boundary", () => {
     expect(await response.json()).toMatchObject({ reply: "Hello", provider: "xai" });
     expect(MockOpenAI).toHaveBeenCalledWith({
       apiKey: "test-xai-key",
-      baseURL: "https://api.x.ai/v1"
+      baseURL: "https://api.x.ai/v1",
+      timeout: 30_000,
+      maxRetries: 0
     });
     expect(createResponse).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "test-xai-model" })
+      expect.objectContaining({ model: "test-xai-model" }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
   });
 

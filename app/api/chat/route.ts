@@ -1,5 +1,8 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
+import { getResourceLimits } from "../../../lib/resource-limits";
+import { budgetMessages } from "../../../lib/chat-budget";
+import { readLimitedJson, resourceError, withDeadline } from "../../../lib/request-resources";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -95,12 +98,16 @@ function isQuotaError(error: OpenAIErrorLike) {
 }
 
 export async function POST(request: Request) {
-  let body: unknown;
   try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+    return await handleChat(request);
+  } catch (error) {
+    return resourceError(error) || NextResponse.json({ error: "Unable to process chat request." }, { status: 500 });
   }
+}
+
+async function handleChat(request: Request) {
+  const limits = getResourceLimits();
+  const body = await readLimitedJson(request, limits.chatBodyBytes, limits.bodyTimeoutMs);
 
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     return NextResponse.json({ error: "Invalid chat payload." }, { status: 400 });
@@ -112,8 +119,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid chat payload." }, { status: 400 });
   }
 
-  const messages = payload.messages.slice(-12);
   const chatMode = payload.mode === undefined ? "standard" : payload.mode as ChatMode;
+  const messages = budgetMessages(payload.messages, getSystemPrompt(chatMode), limits);
   const demoMode = process.env.JENSEN_DEMO_MODE === "true";
   const provider = getProviderConfig();
 
@@ -136,12 +143,15 @@ export async function POST(request: Request) {
 
   const client = new OpenAI({
     apiKey: provider.apiKey,
-    baseURL: provider.baseURL
+    baseURL: provider.baseURL,
+    timeout: limits.providerTimeoutMs,
+    maxRetries: limits.providerRetries
   });
 
   try {
-    const response = await client.responses.create({
+    const response = await withDeadline(request.signal, limits.providerTimeoutMs, (signal) => client.responses.create({
       model: provider.model,
+      max_output_tokens: limits.outputTokens,
       input: [
         {
           role: "system",
@@ -152,7 +162,7 @@ export async function POST(request: Request) {
           content: message.content
         }))
       ]
-    });
+    }, { signal, timeout: limits.providerTimeoutMs, maxRetries: limits.providerRetries }));
 
     return NextResponse.json({
       reply: response.output_text || "I heard you, but I could not form a response.",
@@ -161,6 +171,11 @@ export async function POST(request: Request) {
       chatMode
     });
   } catch (error) {
+    const bounded = resourceError(error);
+    if (bounded) return bounded;
+    if (error instanceof Error && error.name === "APIConnectionTimeoutError") {
+      return NextResponse.json({ error: "Chat deadline exceeded.", code: "request_timeout" }, { status: 504 });
+    }
     const openAIError = error as OpenAIErrorLike;
 
     if (isQuotaError(openAIError)) {

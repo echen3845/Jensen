@@ -11,6 +11,12 @@ beforeEach(() => {
     throw new Error("Network access is disabled in unit tests. Mock the provider boundary.");
   }));
 
+  for (const key of [
+    "JENSEN_CHAT_BODY_BYTES", "JENSEN_MAX_MESSAGES", "JENSEN_MESSAGE_BYTES",
+    "JENSEN_MODEL_INPUT_BYTES", "JENSEN_MODEL_OUTPUT_TOKENS", "JENSEN_AUDIO_BYTES",
+    "JENSEN_AUDIO_SECONDS", "JENSEN_BODY_TIMEOUT_MS", "JENSEN_PROVIDER_TIMEOUT_MS",
+    "JENSEN_PROVIDER_RETRIES"
+  ]) vi.stubEnv(key, "");
   vi.stubEnv("AI_PROVIDER", "openai");
   vi.stubEnv("JENSEN_DEMO_MODE", "false");
   vi.stubEnv("OPENAI_API_KEY", "");
