@@ -75,7 +75,7 @@ export async function finishClaim(claim:Claim,error?:unknown){
     await client.query("UPDATE tasks SET status='pending',updated_at=now() WHERE id=$1 AND user_id=$2",[claim.taskId,claim.userId]);
    }
   }
-  if(error&&state!=="cancelled"){
+  if(error&&!["succeeded","failed","cancelled"].includes(state)){
    const code=error instanceof ApiError?error.code:(error as {code?:string})?.code||"task_failed";
    const retryable=!(error instanceof ApiError)||["provider_rate_limited","provider_timeout","provider_unavailable","concurrency_limited","request_timeout","request_cancelled","worker_cancelled"].includes(code);
    const attempts=queue.attempts+1,retry=retryable&&attempts<queue.max_attempts;

@@ -134,6 +134,14 @@ describe("durable PostgreSQL workers",()=>{
   expect((await taskFor(user,task.id)).status).toBe("pending");
   expect((await database().query("SELECT state FROM task_queue WHERE task_id=$1",[task.id])).rows[0].state).toBe("pending");
  });
+ it("keeps a committed terminal result when a late worker timeout is reported",async()=>{
+  const user=await owner(),task=await newTask(user,"Fixture"),claimed=await claim();
+  await checkpoint(user,task.id,{v:1,step:1,calls:0,history:[],failures:0},"succeeded",{summary:"Done",receipts:[]},claimed.token);
+  await finishClaim(claimed,new ApiError(504,"provider_timeout","Late timeout"));
+  expect((await taskFor(user,task.id)).status).toBe("succeeded");
+  expect((await database().query("SELECT state FROM task_queue WHERE task_id=$1",[task.id])).rows[0].state).toBe("succeeded");
+  expect(await claimTask()).toBe(null);
+ });
  it("retains the global spending hold when an account is deleted",async()=>{
   const row=(await database().query("SELECT spent::text,reserved::text FROM global_usage_windows WHERE bucket=(now() AT TIME ZONE 'UTC')::date")).rows[0]||{spent:"0",reserved:"0"};
   vi.stubEnv("JENSEN_GLOBAL_DAILY_MICRO_USD",String(Number(row.spent)+Number(row.reserved)+5));
