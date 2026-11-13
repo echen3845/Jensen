@@ -2,6 +2,14 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { createResponse, createTranscription } from "./mocks/openai";
 
 vi.mock("openai", () => import("./mocks/openai"));
+vi.mock("../lib/auth", async importOriginal => ({
+  ...await importOriginal<typeof import("../lib/auth")>(),
+  requireIdentity: vi.fn(async()=>({id:"00000000-0000-4000-8000-000000000001",email:null}))
+}));
+vi.mock("../lib/store", async importOriginal => ({
+  ...await importOriginal<typeof import("../lib/store")>(),
+  ...await import("./mocks/store")
+}));
 
 // Fail on accidental network use, including on machines with real API keys.
 afterEach(() => vi.restoreAllMocks());

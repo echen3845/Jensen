@@ -35,7 +35,7 @@ describe("chat provider boundary", () => {
     expect(MockOpenAI).not.toHaveBeenCalled();
   });
 
-  it("keeps model context bounded while preserving application instructions", async () => {
+  it("uses the newest prompt instead of trusting earlier client history", async () => {
     vi.stubEnv("OPENAI_API_KEY", "test-key");
     createResponse.mockResolvedValueOnce({ output_text: "A real tool is not connected yet." });
     const messages = Array.from({ length: 20 }, (_, i) => ({
@@ -54,7 +54,7 @@ describe("chat provider boundary", () => {
       max_output_tokens: 1024,
       input: [
         { role: "system", content: expect.stringContaining("cannot perform yet") },
-        ...messages.slice(-12)
+        messages.at(-1)!
       ]
     }, expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000, maxRetries: 0 }));
     expect(fetch).not.toHaveBeenCalled();

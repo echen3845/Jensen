@@ -1,5 +1,6 @@
 import { apiRoute, ApiError } from "../../../lib/api-errors";
 import OpenAI from "openai";
+import { requireIdentity, localDemo } from "../../../lib/auth";
 import { NextResponse } from "next/server";
 import { validateAudio } from "../../../lib/audio-validation";
 import { getResourceLimits } from "../../../lib/resource-limits";
@@ -10,6 +11,8 @@ export async function POST(request: Request) {
 }
 
 async function handleTranscription(request: Request) {
+  if (localDemo()) throw new ApiError(403,"demo_read_only","Demo mode does not send recordings to paid providers.");
+  await requireIdentity(request);
   const limits = getResourceLimits();
   const apiKey = process.env.OPENAI_API_KEY;
     const type = request.headers.get("content-type") || "";

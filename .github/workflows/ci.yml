@@ -16,7 +16,22 @@ jobs:
     name: Lint, types, tests, and build
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: jensen
+          POSTGRES_PASSWORD: jensen-test
+          POSTGRES_DB: jensen_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U jensen"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
+      TEST_DATABASE_URL: postgres://jensen:jensen-test@127.0.0.1:5432/jensen_test
       CI: "true"
       NEXT_TELEMETRY_DISABLED: "1"
       JENSEN_DEMO_MODE: "true"
@@ -30,5 +45,7 @@ jobs:
         run: npm ci
       - name: Run quality checks
         run: npm run check
+      - name: Verify PostgreSQL integration
+        run: npm run test:integration
       - name: Audit production dependencies
         run: npm run audit:prod
