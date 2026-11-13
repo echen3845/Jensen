@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
+import { ApiError } from "./api-errors";
 
-export class RequestError extends Error {
+export class RequestError extends ApiError {
   constructor(public status: number, public code: string, message: string) {
-    super(message);
+    super(status, code, message);
     this.name = "RequestError";
   }
 }

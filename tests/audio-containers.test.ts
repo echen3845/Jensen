@@ -44,7 +44,7 @@ describe("audio container validation with real demuxing", () => {
     vi.stubEnv("OPENAI_API_KEY", "test-key");
     createTranscription.mockResolvedValueOnce({ text: "hello" });
     const response = await transcribe(await encodedFile(kind));
-    expect(await response.json()).toEqual({ text: "hello" });
+    expect(await response.json()).toMatchObject({ text: "hello" });
     expect(response.status).toBe(200);
   });
 

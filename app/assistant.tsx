@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import type { ClientLimits } from "../lib/resource-limits";
 import { startBoundedRecording } from "../lib/recording";
 import { buildChatRequest } from "../lib/client-chat";
+import { failureMessage } from "../lib/api-contract";
 
 type Message = {
   id: string;
@@ -301,14 +302,8 @@ export default function Assistant({ limits }: { limits: ClientLimits }) {
       });
       setStatus(handsFreeEnabledRef.current ? "Jensen awake" : "Systems ready");
       speak(reply);
-    } catch {
-      const reply =
-        "I could not connect to the local server. Check that the app is running and try again.";
-      setMessages((current) => [
-        ...current,
-        { id: createId(), role: "assistant", content: reply }
-      ]);
-      setStatus("Connection interrupted");
+    } catch (error) {
+      setStatus(failureMessage(error));
     } finally {
       setIsThinking(false);
       isThinkingRef.current = false;

@@ -1,13 +1,17 @@
+import { apiRoute, ApiError } from "../../../lib/api-errors";
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import { validateAudio } from "../../../lib/audio-validation";
 import { getResourceLimits } from "../../../lib/resource-limits";
-import { readLimitedBody, RequestError, resourceError, withDeadline } from "../../../lib/request-resources";
+import { readLimitedBody, RequestError, withDeadline } from "../../../lib/request-resources";
 
 export async function POST(request: Request) {
+  return apiRoute(request, "transcribe", handleTranscription);
+}
+
+async function handleTranscription(request: Request) {
   const limits = getResourceLimits();
   const apiKey = process.env.OPENAI_API_KEY;
-  try {
     const type = request.headers.get("content-type") || "";
     if (!/^multipart\/form-data\s*;/i.test(type)) {
       void request.body?.cancel().catch(() => {});
@@ -42,18 +46,7 @@ export async function POST(request: Request) {
       }, { signal, timeout: limits.providerTimeoutMs, maxRetries: limits.providerRetries });
     });
     if (!transcription) {
-      return NextResponse.json({ text: "", error: "OpenAI API key is not configured." }, { status: 503 });
+      throw new ApiError(503, "provider_configuration", "The transcription provider is not configured.");
     }
     return NextResponse.json({ text: transcription.text || "" });
-  } catch (error) {
-    const bounded = resourceError(error);
-    if (bounded) return bounded;
-    if (error instanceof Error && error.name === "APIConnectionTimeoutError") {
-      return NextResponse.json({ text: "", error: "Transcription deadline exceeded.", code: "request_timeout" }, { status: 504 });
-    }
-    return NextResponse.json({
-      text: "",
-      error: "I could not transcribe the microphone recording. Check API credits, microphone permission, and network access."
-    }, { status: 502 });
-  }
 }

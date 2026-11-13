@@ -133,3 +133,7 @@ In production, set reverse-proxy/platform body caps and timeouts as well: some i
 - Add encrypted long-term memory
 - Add authentication before exposing the app outside your local network
 - Wrap the web app with Tauri or Electron for a desktop tray experience
+
+## API errors and diagnostics
+
+Every API response includes `ok`, a generated `requestId`, and an `x-request-id` header. Failures include a stable `code`, a safe `error` message, and `retryable`; they never represent completed assistant work. Rate limits (429, with bounded Retry-After) differ from unavailable billing (503), credentials/configuration (503), upstream rejection/outage (502), timeouts (504), cancellation (499), and invalid input (4xx). Provider error text is never returned. Diagnostic records contain only operation, request ID, status/code, and duration; prompts, audio, email, tokens, headers, and exception objects are excluded. Correlate support reports with request IDs, not raw private content. Client transport failures remain status messages rather than conversation entries.

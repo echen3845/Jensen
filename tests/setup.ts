@@ -1,10 +1,13 @@
-import { beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import { createResponse, createTranscription } from "./mocks/openai";
 
 vi.mock("openai", () => import("./mocks/openai"));
 
 // Fail on accidental network use, including on machines with real API keys.
+afterEach(() => vi.restoreAllMocks());
+
 beforeEach(() => {
+  vi.spyOn(console, "info").mockImplementation(() => {});
   createResponse.mockReset();
   createTranscription.mockReset();
   vi.stubGlobal("fetch", vi.fn(() => {

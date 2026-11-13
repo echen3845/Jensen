@@ -30,9 +30,8 @@ describe("chat provider boundary", () => {
     vi.stubEnv("AI_PROVIDER", provider);
     const response = await POST(chatRequest([message]));
 
-    expect((await response.json()).reply).toContain(
-      provider === "xai" ? "XAI_API_KEY" : "OPENAI_API_KEY"
-    );
+    expect(response.status).toBe(503);
+    expect((await response.json()).code).toBe("provider_configuration");
     expect(MockOpenAI).not.toHaveBeenCalled();
   });
 
@@ -87,8 +86,8 @@ describe("chat provider boundary", () => {
     const response = await POST(chatRequest([message]));
     const body = await response.json();
 
-    expect(body.mode).toBe("error");
-    expect(body.reply).not.toContain("private-test-key");
-    expect(body.reply).not.toContain("internal provider detail");
+    expect(body.ok).toBe(false);
+    expect(body.error).not.toContain("private-test-key");
+    expect(body.error).not.toContain("internal provider detail");
   });
 });

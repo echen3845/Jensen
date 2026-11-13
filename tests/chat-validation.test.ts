@@ -110,7 +110,7 @@ describe("chat request validation", () => {
   it("accepts empty history without invoking a provider", async () => {
     const response = await POST(request({ messages: [] }));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ reply: "Tell me what you need and I will help." });
+    expect(await response.json()).toMatchObject({ reply: "Tell me what you need and I will help." });
     expect(MockOpenAI).not.toHaveBeenCalled();
   });
 });
