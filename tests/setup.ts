@@ -2,6 +2,11 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { createResponse, createTranscription } from "./mocks/openai";
 
 vi.mock("openai", () => import("./mocks/openai"));
+vi.mock("../lib/quotas", async importOriginal=>({
+ ...await importOriginal<typeof import("../lib/quotas")>(),
+ withUsage:vi.fn(async <T,>(_user:string,_operation:string,_amount:number,work:()=>Promise<T>)=>work()),
+ throttleAnonymous:vi.fn(async()=>{})
+}));
 vi.mock("../lib/auth", async importOriginal => ({
   ...await importOriginal<typeof import("../lib/auth")>(),
   requireIdentity: vi.fn(async()=>({id:"00000000-0000-4000-8000-000000000001",email:null}))
@@ -28,6 +33,7 @@ beforeEach(() => {
     "JENSEN_AUDIO_SECONDS", "JENSEN_BODY_TIMEOUT_MS", "JENSEN_PROVIDER_TIMEOUT_MS",
     "JENSEN_PROVIDER_RETRIES"
   ]) vi.stubEnv(key, "");
+  for(const key of ["JENSEN_CHAT_INPUT_MICRO_USD","JENSEN_CHAT_OUTPUT_MICRO_USD","JENSEN_AUDIO_MICRO_USD_PER_SECOND"])vi.stubEnv(key,"1");
   vi.stubEnv("AI_PROVIDER", "openai");
   vi.stubEnv("JENSEN_DEMO_MODE", "false");
   vi.stubEnv("OPENAI_API_KEY", "");
