@@ -46,6 +46,8 @@ export async function currentIdentity(request: Request): Promise<Identity | null
 export async function requireIdentity(request: Request, mutation = true) {
   const user = await currentIdentity(request);
   if (!user) { await throttleAnonymous(request); throw new ApiError(401,"authentication_required","Sign in to continue."); }
+  const expected=request.headers.get("x-jensen-user");
+  if(expected&&expected!==user.id)throw new ApiError(403,"session_changed","Session changed. Reload before continuing.");
   if (mutation && !["GET","HEAD"].includes(request.method)) checkOrigin(request);
   return user;
 }
@@ -109,6 +111,7 @@ export async function finishLogin(request: Request) {
 }
 export async function signOut(request: Request) {
   checkOrigin(request);
+  if(request.headers.has("x-jensen-user"))await requireIdentity(request);
   const token = cookie(request,sessionCookie());
   if (token) await database().query("DELETE FROM sessions WHERE token_hash=$1",[hashToken(token)]);
   const response = NextResponse.json({signedOut:true});

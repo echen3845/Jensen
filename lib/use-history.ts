@@ -23,13 +23,13 @@ export function useHistory(userId:string|null,welcome:HistoryMessage[]){
  },[setMessages,welcome]);
  const load=useCallback(async(id:string,before?:string)=>{
   const snapshot=generation.current.value;
-  const response=await fetch("/api/conversations/"+id+(before?"?before="+before:""),{cache:"no-store",signal:AbortSignal.timeout(10000)});
+  const response=await fetch("/api/conversations/"+id+(before?"?before="+before:""),{cache:"no-store",headers:userId?{"x-jensen-user":userId}:{},signal:AbortSignal.timeout(10000)});
   const body=await response.json();
   if(snapshot!==generation.current.value||selected.current!==id)return false;
-  if(!response.ok){if(response.status===401||response.status===404)clearScope();throw new Error("Cannot restore history.");}
+  if(!response.ok){if(response.status===401||response.status===403||response.status===404)clearScope();throw new Error("Cannot restore history.");}
   setMessages(body.messages.length?body.messages:welcome);
   setCursor(body.cursor);setHasMore(body.hasMore);return true;
- },[clearScope,setMessages,welcome]);
+ },[clearScope,setMessages,userId,welcome]);
  const select=useCallback(async(id:string)=>{
   const snapshot=++generation.current.value;
   selected.current=id;setConversationId(id);setReady(false);
@@ -39,7 +39,7 @@ export function useHistory(userId:string|null,welcome:HistoryMessage[]){
  const create=useCallback(async()=>{
   if(!userId){setMessages(welcome);return;}
   const snapshot=generation.current.value;
-  const response=await fetch("/api/conversations",{method:"POST",headers:{"content-type":"application/json"},body:"{}",signal:AbortSignal.timeout(10000)});
+  const response=await fetch("/api/conversations",{method:"POST",headers:{"content-type":"application/json","x-jensen-user":userId},body:"{}",signal:AbortSignal.timeout(10000)});
   const body=await response.json();
   if(snapshot!==generation.current.value)return;
   if(!response.ok){if(response.status===401)clearScope();throw new Error("Cannot create conversation.");}
@@ -56,11 +56,11 @@ export function useHistory(userId:string|null,welcome:HistoryMessage[]){
    setMessages(welcome);setItems([]);setConversationId(null);setError("");setReady(!userId);
    if(!userId)return;
    try{
-    const session=await fetch("/api/auth/session",{cache:"no-store",signal:AbortSignal.timeout(10000)});
+    const session=await fetch("/api/auth/session",{cache:"no-store",headers:userId?{"x-jensen-user":userId}:{},signal:AbortSignal.timeout(10000)});
     const identity=await session.json();
     if(!active||snapshot!==lifetime.value)return;
     if(identity.user?.id!==userId){clearScope();return;}
-    const response=await fetch("/api/conversations",{cache:"no-store",signal:AbortSignal.timeout(10000)});
+    const response=await fetch("/api/conversations",{cache:"no-store",headers:userId?{"x-jensen-user":userId}:{},signal:AbortSignal.timeout(10000)});
     const body=await response.json();
     if(!active||snapshot!==lifetime.value)return;
     if(!response.ok)throw new Error("Sign-in expired.");

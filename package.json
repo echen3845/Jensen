@@ -14,9 +14,11 @@
           "audit:prod":  "npm audit --omit=dev --audit-level=high",
           "db:migrate":  "tsx scripts/migrate.ts",
           "db:prune":  "tsx scripts/prune.ts",
-          "test:integration":  "vitest run --config vitest.integration.config.mts"
+          "test:integration":  "vitest run --config vitest.integration.config.mts",
+          "db:rotate-credentials":  "tsx scripts/rotate-credentials.ts"
         },
   "dependencies":  {
+            "ipaddr.js":  "2.5.0",
             "jose":  "6.2.17",
             "mediabunny":  "1.65.2",
             "next":  "16.4.6",
