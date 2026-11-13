@@ -10,6 +10,7 @@ import type { Identity } from "../lib/auth";
 import { useHistory } from "../lib/use-history";
 import { useVoice } from "../lib/use-voice";
 import { ConversationScope } from "../lib/conversation-scope";
+import TaskPanel from "./task-panel";
 
 type Message = {
   id: string;
@@ -107,6 +108,7 @@ export default function Assistant({ limits,identity }: { limits: ClientLimits;id
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json",
+          ...(identity?{"x-jensen-user":identity.id}:{}),
           ...(history.conversationId ? {"x-conversation-id":history.conversationId,"x-client-message-id":userMessage.id} : {}) },
         body: request.body,
         signal: operation.signal
@@ -116,7 +118,7 @@ export default function Assistant({ limits,identity }: { limits: ClientLimits;id
       const data = (await response.json()) as { reply?: string; error?: string; code?: string };
       if(!operation.usable())return;
       if (!response.ok) {
-        if(data.code==="authentication_required"||response.status===404)history.clearScope();
+        if(data.code==="authentication_required"||data.code==="session_changed"||response.status===404)history.clearScope();
         setStatus(data.error || "Request failed. Please try again.");
         return;
       }
@@ -161,6 +163,7 @@ export default function Assistant({ limits,identity }: { limits: ClientLimits;id
 
       const response = await fetch("/api/transcribe", {
         method: "POST",
+        headers:identity?{"x-jensen-user":identity.id}:{},
         body: formData,
         signal: operation.signal
       });
@@ -257,7 +260,7 @@ export default function Assistant({ limits,identity }: { limits: ClientLimits;id
             <p>{identity?.email|| (identity?"Signed in":"Demo: no live actions")}</p>
             {identity ? <button type="button" onClick={async()=>{
               voice.stopListening();voice.stopSpeaking();cancelActive();
-              const response=await fetch("/api/auth/signout",{method:"POST"});
+              const response=await fetch("/api/auth/signout",{method:"POST",headers:{"x-jensen-user":identity.id}});
               if(response.ok){setMessages(starterMessages);router.refresh();}
               else setStatus("Sign-out failed. Please try again.");
             }}>Sign out</button>:null}
@@ -355,6 +358,7 @@ export default function Assistant({ limits,identity }: { limits: ClientLimits;id
         </form>
 
         <p>Hands-free recognition may send audio to your browser speech service before the wake word is detected. It is not local wake-word detection or identity verification.</p>
+        {identity?<TaskPanel key={identity.id} userId={identity.id}/>:null}
         <footer className="controls">
           <button type="button" onClick={()=>voice.stopSpeaking()}>Stop speaking</button>
           <button type="button" onClick={()=>{voice.stopListening();voice.stopSpeaking();cancelActive();setStatus("Request stopped. Already completed server work remains.");}}>Stop request</button>

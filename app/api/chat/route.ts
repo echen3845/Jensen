@@ -1,6 +1,7 @@
 import { apiRoute, ApiError } from "../../../lib/api-errors";
 import { randomUUID } from "node:crypto";
 import { withUsage,chatReservation,actualChatCost } from "../../../lib/quotas";
+import { containsSecret,redactText } from "../../../lib/secrets";
 import { requireIdentity, localDemo } from "../../../lib/auth";
 import { createConversation, beginTurn, serverContext, finishTurn, uuid } from "../../../lib/store";
 import OpenAI from "openai";
@@ -127,13 +128,14 @@ async function handleChat(request: Request) {
 
   if (!user) throw new ApiError(401,"authentication_required","Sign in to continue.");
   const latest=payload.messages.at(-1);
+  if(latest&&containsSecret(latest.content))throw new ApiError(400,"sensitive_prompt","Do not include credentials in chat prompts.");
   if (latest?.role!=="user") throw new ApiError(400,"invalid_prompt","The latest message must be a user prompt.");
   const conversationId=request.headers.get("x-conversation-id")
     ? uuid(request.headers.get("x-conversation-id")) : (await createConversation(user.id)).id as string;
   const messageId=uuid(request.headers.get("x-client-message-id")||randomUUID());
   const turn=await beginTurn(user.id,conversationId,messageId,latest.content);
   if ("cached" in turn) return NextResponse.json({reply:turn.cached,conversationId,mode:"live",cached:true});
-  messages=await serverContext(user.id,conversationId,turn.seq!,getSystemPrompt(chatMode),limits);
+  messages=(await serverContext(user.id,conversationId,turn.seq!,getSystemPrompt(chatMode),limits)).map(m=>({...m,content:redactText(m.content)}));
   const client = new OpenAI({
     apiKey: provider.apiKey,
     baseURL: provider.baseURL,
