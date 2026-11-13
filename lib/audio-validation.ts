@@ -44,9 +44,9 @@ export async function validateAudio(file: File, limits: ResourceLimits, signal: 
     }
     if (signal.aborted) throw signal.reason;
     const extension = format === WEBM ? "webm" : format === MP4 ? "m4a" : "wav";
-    return new File([bytes], `recording.${extension}`, {
+    return {seconds:duration,file:new File([bytes], `recording.${extension}`, {
       type: format === WEBM ? "audio/webm" : format === MP4 ? "audio/mp4" : "audio/wav"
-    });
+    })};
   } catch (error) {
     if (error instanceof RequestError) throw error;
     if (signal.aborted) throw signal.reason;

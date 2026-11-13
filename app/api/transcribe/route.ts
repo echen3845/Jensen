@@ -1,5 +1,6 @@
 import { apiRoute, ApiError } from "../../../lib/api-errors";
 import OpenAI from "openai";
+import { withUsage,prices } from "../../../lib/quotas";
 import { requireIdentity, localDemo } from "../../../lib/auth";
 import { NextResponse } from "next/server";
 import { validateAudio } from "../../../lib/audio-validation";
@@ -12,7 +13,7 @@ export async function POST(request: Request) {
 
 async function handleTranscription(request: Request) {
   if (localDemo()) throw new ApiError(403,"demo_read_only","Demo mode does not send recordings to paid providers.");
-  await requireIdentity(request);
+  const user=await requireIdentity(request);
   const limits = getResourceLimits();
   const apiKey = process.env.OPENAI_API_KEY;
     const type = request.headers.get("content-type") || "";
@@ -38,15 +39,16 @@ async function handleTranscription(request: Request) {
       throw new RequestError(400, "invalid_form", "Upload exactly one audio file.");
     }
     const transcription = await withDeadline(request.signal, limits.providerTimeoutMs, async (signal) => {
-      const file = await validateAudio(audio, limits, signal);
+      const {file,seconds} = await validateAudio(audio, limits, signal);
       if (!apiKey) return null;
       const client = new OpenAI({
         apiKey, timeout: limits.providerTimeoutMs, maxRetries: limits.providerRetries
       });
-      return client.audio.transcriptions.create({
+      const cost=Math.ceil(Math.max(1,seconds)*prices("transcribe")[0]);
+      return withUsage(user.id,"transcribe",cost,()=>client.audio.transcriptions.create({
         file,
         model: process.env.OPENAI_TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe"
-      }, { signal, timeout: limits.providerTimeoutMs, maxRetries: limits.providerRetries });
+      }, { signal, timeout: limits.providerTimeoutMs, maxRetries: limits.providerRetries }),()=>cost);
     });
     if (!transcription) {
       throw new ApiError(503, "provider_configuration", "The transcription provider is not configured.");

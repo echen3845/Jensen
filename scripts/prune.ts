@@ -1,6 +1,8 @@
 import { database,closeDatabase,transaction } from "../lib/db";
 try {process.loadEnvFile(".env.local");} catch {}
 async function prune() {
+ await database().query("DELETE FROM rate_limits WHERE bucket<floor(extract(epoch FROM now())/60)::bigint-120");
+ await database().query("DELETE FROM provider_leases WHERE state<>'pending' AND created_at<now()-interval '90 days'");
  await database().query("DELETE FROM sessions WHERE expires_at<now()");
  await database().query("DELETE FROM login_states WHERE expires_at<now()");
  const users=(await database().query("SELECT id FROM users")).rows;

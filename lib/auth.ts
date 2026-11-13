@@ -4,6 +4,7 @@ import { EncryptJWT, jwtDecrypt } from "jose";
 import * as oidc from "openid-client";
 import { ApiError } from "./api-errors";
 import { database, transaction } from "./db";
+import { throttleAnonymous } from "./quotas";
 
 export type Identity = { id: string; email: string | null };
 const sessionCookie = () => applicationUrl().protocol==="https:" ? "__Host-jensen.session" : "jensen.session";
@@ -44,7 +45,7 @@ export async function currentIdentity(request: Request): Promise<Identity | null
 }
 export async function requireIdentity(request: Request, mutation = true) {
   const user = await currentIdentity(request);
-  if (!user) throw new ApiError(401,"authentication_required","Sign in to continue.");
+  if (!user) { await throttleAnonymous(request); throw new ApiError(401,"authentication_required","Sign in to continue."); }
   if (mutation && !["GET","HEAD"].includes(request.method)) checkOrigin(request);
   return user;
 }
@@ -58,7 +59,8 @@ async function provider() {
   return configuration ??= oidc.discovery(new URL(process.env.OIDC_ISSUER), process.env.OIDC_CLIENT_ID,
     { client_secret: process.env.OIDC_CLIENT_SECRET }, undefined, { timeout: 10 });
 }
-export async function beginLogin() {
+export async function beginLogin(request?:Request) {
+  if(request)await throttleAnonymous(request);
   const state = oidc.randomState(), nonce = oidc.randomNonce(), verifier = oidc.randomPKCECodeVerifier();
   const challenge = await oidc.calculatePKCECodeChallenge(verifier);
   const encrypted = await new EncryptJWT({ state,nonce,verifier }).setProtectedHeader({ alg:"dir",enc:"A256GCM" })

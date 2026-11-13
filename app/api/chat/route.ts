@@ -1,5 +1,6 @@
 import { apiRoute, ApiError } from "../../../lib/api-errors";
 import { randomUUID } from "node:crypto";
+import { withUsage,chatReservation,actualChatCost } from "../../../lib/quotas";
 import { requireIdentity, localDemo } from "../../../lib/auth";
 import { createConversation, beginTurn, serverContext, finishTurn, uuid } from "../../../lib/store";
 import OpenAI from "openai";
@@ -140,7 +141,7 @@ async function handleChat(request: Request) {
     maxRetries: limits.providerRetries
   });
 
-    const response = await withDeadline(request.signal, limits.providerTimeoutMs, (signal) => client.responses.create({
+    const response = await withUsage(user.id,"chat",chatReservation([{content:getSystemPrompt(chatMode)},...messages],limits.outputTokens),()=>withDeadline(request.signal, limits.providerTimeoutMs, (signal) => client.responses.create({
       model: provider.model,
       max_output_tokens: limits.outputTokens,
       input: [
@@ -153,7 +154,7 @@ async function handleChat(request: Request) {
           content: message.content
         }))
       ]
-    }, { signal, timeout: limits.providerTimeoutMs, maxRetries: limits.providerRetries }));
+    }, { signal, timeout: limits.providerTimeoutMs, maxRetries: limits.providerRetries })),actualChatCost);
 
     await finishTurn(user.id,conversationId,messageId,response.output_text || "I could not form a response.");
     return NextResponse.json({
